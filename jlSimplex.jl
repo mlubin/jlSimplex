@@ -129,20 +129,15 @@ function initialize(d,reinvert::Bool)
         # form basis matrix w/ slacks
         structural = d.data.A[1:nrow,find(d.variableState[1:ncol] .== Basic)] # no ref implementation for bool index matrix?
         slacks = d.basicIdx[d.basicIdx.>ncol]
-        print("$(size(structural)[2]) structural, $(length(slacks)) slacks\n")
         colptr = [ structural.colptr[1:(size(structural)[2])], (nnz(structural)+1):(nnz(structural)+length(slacks)+1) ]
         @assert length(colptr) == nrow+1
         rowval = [ structural.rowval[1:nnz(structural)], slacks-ncol ]
         nzval = [ structural.nzval[1:nnz(structural)], -ones(length(slacks)) ]
-        print(structural.colptr,"\n")
-        print(colptr,"\n",rowval,"\n",nzval,"\n")
         d.factor = lufact!(SparseMatrixCSC(nrow,nrow,colptr,rowval,nzval))
     end
 
     for i in 1:(nrow+ncol)
-        print("$i $(length(d.variableState)) $(length(d.data.boundClass)) $(length(d.x)) $(length(d.data.l)) $(length(d.data.u))\n")
-        @assert i::Int > 0 && i <= length(d.variableState)
-        if (d.variableState[i] == Basic) # || (d.data.boundClass[i] == Free)
+        if (d.variableState[i] == Basic) || (d.data.boundClass[i] == Free)
             d.x[i] = 0.
         elseif d.variableState[i] == AtLower
             d.x[i] = d.data.l[i]
@@ -150,7 +145,6 @@ function initialize(d,reinvert::Bool)
             d.x[i] = d.data.u[i]
         end
     end
-
     #calculate Xb = B^{-1}(b-A_n*x_n)
     xb = zeros(nrow)
     # take linear combination of columns for matrix-vector product
@@ -160,26 +154,30 @@ function initialize(d,reinvert::Bool)
         end
         for k in d.data.A.colptr[i]:(d.data.A.colptr[i+1]-1)
             xb[d.data.A.rowval[k]] -= d.x[i]*d.data.A.nzval[k]
+            printf("xb[%d] += %f*%f (col %d)\n",d.data.A.rowval[k],d.x[i],d.data.A.nzval[k],i)
         end
     end
     for i in 1:nrow
         #if x[i+ncol] == 0.
         #    continue
         #end
+        if (d.x[i+ncol] != 0.)
+            printf("xb[%d] -= %f\n",i,d.x[i+ncol])
+        end
         xb[i] += d.x[i+ncol] 
     end
 
+    println(xb)
     xb = d.factor\xb
     for i in 1:nrow
         d.x[d.basicIdx[i]] = xb[i]
     end
-
     # calculate y = B^{-T}c_B
     y = d.factor'\d.c[d.basicIdx]
 
     # calculate dn = cn - An^Ty
     # take dot products with the columns for matrix-vector product
-    for i in 1:(ncol+nrow)
+    for i in 1:ncol
         if (d.variableState[i] == Basic)
             d.d[i] = 0.
             continue
@@ -189,6 +187,14 @@ function initialize(d,reinvert::Bool)
             val += y[d.data.A.rowval[k]]*d.data.A.nzval[k]
         end
         d.d[i] = d.c[i]-val
+    end
+    for i in 1:nrow
+        k = i + ncol
+        if (d.variableState[k] == Basic)
+            d.d[k] = 0.
+            continue
+        end
+        d.d[k] = d.c[k]+y[i]
     end
 
     d.objval = dot(d.x,d.c)
@@ -230,19 +236,24 @@ function initialize(d,reinvert::Bool)
     if (dualinfeas > 0)
         if (primalinfeas > 0)
             d.status = Initialized
-            println("jlSimplex $(d.nIter) Obj: $(d.objval) Primal inf $primalinfeas ($nprimalinfeas) Dual inf $dualinfeas ($ndualinfeas)")
+            print("jlSimplex $(d.nIter) Obj: $(d.objval) Primal inf $primalinfeas ($nprimalinfeas) Dual inf $dualinfeas ($ndualinfeas)")
         else
             d.status = PrimalFeasible
-            println("jlSimplex $(d.nIter) Obj: $(d.objval) Dual inf $dualinfeas ($ndualinfeas)")
+            print("jlSimplex $(d.nIter) Obj: $(d.objval) Dual inf $dualinfeas ($ndualinfeas)")
         end
     else
         if (primalinfeas > 0)
             d.status = DualFeasible
-            println("jlSimplex $(d.nIter) Obj: $(d.objval) Primal inf $primalinfeas ($nprimalinfeas)")
+            print("jlSimplex $(d.nIter) Obj: $(d.objval) Primal inf $primalinfeas ($nprimalinfeas)")
         else
             d.status = Optimal
-            println("jlSimplex $(d.nIter) Obj: $(d.objval)")
+            print("jlSimplex $(d.nIter) Obj: $(d.objval)")
         end
+    end
+    if (d.phase1)
+        print(" (Phase I)\n")
+    else
+        print("\n")
     end
 
 end
@@ -284,6 +295,7 @@ function dualRatioTest(d::dualSimplexData,alpha2)
         if d.variableState[i] == Basic || d.data.boundClass[i] == Fixed
             continue
         end
+        print("d: $(d.d[i]) alpha: $(alpha2[i])\n")
         if ((d.variableState[i] == AtLower && alpha2[i] > pivotTol) || (d.variableState[i] == AtUpper && alpha2[i] < -pivotTol) || (d.variableState[i] == Free && (alpha2[i] > pivotTol || alpha2[i] < -pivotTol)))
             ratio = 0.
             if (alpha2[i] < 0.)
@@ -298,7 +310,7 @@ function dualRatioTest(d::dualSimplexData,alpha2)
             end
         end
     end
-    #print("$ncandidates candidates, thetaMax = $thetaMax\n")
+    print("$ncandidates candidates, thetaMax = $thetaMax\n")
 
     # pass 2
     enter = -1
@@ -319,10 +331,13 @@ end
 
 function iterate(d::dualSimplexData)
     nrow,ncol = size(d.data.A)
-    @assert d.status == DualFeasible || d.status == Optimal
+    @assert (d.status == DualFeasible || d.status == Optimal)
 
     leave = dualEdgeSelection(d)
-    @assert leave != -1
+    if (leave == -1)
+        d.status = Optimal
+        return
+    end
     leaveIdx = d.basicIdx[leave]
     leaveType = 0
     if (d.x[leaveIdx] > d.data.u[leaveIdx])
@@ -330,7 +345,7 @@ function iterate(d::dualSimplexData)
     elseif (d.x[leaveIdx] < d.data.l[leaveIdx])
         leaveType = Below
     else
-        @assert 0
+        @assert false
     end
 
     rho = zeros(nrow)
@@ -339,7 +354,7 @@ function iterate(d::dualSimplexData)
 
     alpha = zeros(ncol+nrow)
     # todo: put in PRICE function
-    for i in 1:(ncol+nrow)
+    for i in 1:ncol
         if (d.variableState[i] == Basic)
             continue
         end
@@ -348,6 +363,13 @@ function iterate(d::dualSimplexData)
             val += rho[d.data.A.rowval[k]]*d.data.A.nzval[k]
         end
         alpha[i] = val
+    end
+    for i in 1:nrow
+        k = i+ncol
+        if (d.variableState[k] == Basic)
+            continue
+        end
+        alpha[k] = -rho[i]
     end
 
     if leaveType == Below
@@ -394,6 +416,9 @@ function go(d::dualSimplexData)
     for d.nIter in 1:100000
         iterate(d)
         initialize(d,true)
+        if (d.status == Optimal)
+            break
+        end
     end
 
 end
@@ -439,6 +464,7 @@ function makeFeasible(d::dualSimplexData)
     ## TODO: fix for FINNIS
     d.variableState = d2.variableState
     d.c = d2.c
+    initialize(d,true)
 
 
 end
@@ -481,7 +507,9 @@ function LPDataFromMPS(mpsfile::String)
     ret = glp_read_mps(lp,GLP_MPS_FILE,C_NULL,mpsfile)
     @assert ret == 0
     nrow::Int = glp_get_num_rows(lp)
+    nrow = nrow - 1 # gkpk wtf
     ncol::Int = glp_get_num_cols(lp)
+    print("$nrow ROWS!\n")
     
     index1 = Array(Int32,nrow)
     coef1 = Array(Float64,nrow)
@@ -489,7 +517,7 @@ function LPDataFromMPS(mpsfile::String)
     
     starts = Array(Int64,ncol+1)
     idx = Array(Int64,0)
-    elt = Array(Float64)
+    elt = Array(Float64,0)
     nnz = 0
 
     c = Array(Float64,ncol)
@@ -499,6 +527,7 @@ function LPDataFromMPS(mpsfile::String)
     u = Array(Float64,nrow)
     for i in 1:ncol
         c[i] = glp_get_obj_coef(lp,i)
+        print("$i $(c[i])\n")
         t = glp_get_col_type(lp,i)
         if t == GLP_FR
             xlb[i] = typemin(Float64)
@@ -532,6 +561,14 @@ function LPDataFromMPS(mpsfile::String)
     for i in 1:ncol
         starts[i] = nnz+1
         nnz1 = glp_get_mat_col(lp,i,index1,coef1)
+        if index1[nnz1] == nrow+1
+            nnz1 -= 1 # glpk wtf
+        end
+
+        print("vec $(i-1) has length $nnz1 with entries:\n")
+        for k in 1:nnz1
+            print("\t\t$(index1[k]-1)\t\t$(coef1[k])\n")
+        end
         idx = [idx,index1[1:nnz1]]
         elt = [elt,coef1[1:nnz1]]
         nnz += nnz1
