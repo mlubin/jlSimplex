@@ -133,7 +133,7 @@ function initialize(d,reinvert::Bool)
         @assert length(colptr) == nrow+1
         rowval = [ structural.rowval[1:nnz(structural)], slacks-ncol ]
         nzval = [ structural.nzval[1:nnz(structural)], -ones(length(slacks)) ]
-        d.factor = lufact!(SparseMatrixCSC(nrow,nrow,colptr,rowval,nzval))
+        d.factor = UmfpackLU!(SparseMatrixCSC(nrow,nrow,colptr,rowval,nzval))
     end
 
     for i in 1:(nrow+ncol)
@@ -154,23 +154,24 @@ function initialize(d,reinvert::Bool)
         end
         for k in d.data.A.colptr[i]:(d.data.A.colptr[i+1]-1)
             xb[d.data.A.rowval[k]] -= d.x[i]*d.data.A.nzval[k]
-            printf("xb[%d] += %f*%f (col %d)\n",d.data.A.rowval[k],d.x[i],d.data.A.nzval[k],i)
+            #printf("xb[%d] += %f*%f (col %d)\n",d.data.A.rowval[k],d.x[i],d.data.A.nzval[k],i)
         end
     end
     for i in 1:nrow
         #if x[i+ncol] == 0.
         #    continue
         #end
-        if (d.x[i+ncol] != 0.)
-            printf("xb[%d] -= %f\n",i,d.x[i+ncol])
-        end
+        #if (d.x[i+ncol] != 0.)
+        #    printf("xb[%d] -= %f col: %d state: %d class: %d\n",i,d.x[i+ncol],i+ncol,d.variableState[i+ncol],d.data.boundClass[i+ncol])
+        #end
         xb[i] += d.x[i+ncol] 
     end
 
-    println(xb)
+    #println(xb)
     xb = d.factor\xb
     for i in 1:nrow
         d.x[d.basicIdx[i]] = xb[i]
+    #    println("$(d.basicIdx[i]): $(xb[i])")
     end
     # calculate y = B^{-T}c_B
     y = d.factor'\d.c[d.basicIdx]
@@ -208,11 +209,14 @@ function initialize(d,reinvert::Bool)
         end
         infeas = false
         if (d.data.boundClass[i] == Free && (d.d[i] <-d.dualTol || d.d[i] >d.dualTol))
+            #println("$i infeas1")
             infeas=true
         elseif (d.variableState[i] == AtLower && d.d[i] < -d.dualTol && d.data.boundClass[i] != Fixed)
             infeas=true
+            #println("$i infeas2")
         elseif (d.variableState[i] == AtUpper && d.d[i] > d.dualTol && d.data.boundClass[i] != Fixed)
             infeas=true
+            #println("$i inteas3")
         end
         if (infeas)
             dualinfeas += abs(d.d[i])
@@ -291,11 +295,11 @@ function dualRatioTest(d::dualSimplexData,alpha2)
     thetaMax = 1e25
     pivotTol = 1e-7
 
-    for i in 1:ncol
+    for i in 1:(ncol+nrow)
         if d.variableState[i] == Basic || d.data.boundClass[i] == Fixed
             continue
         end
-        print("d: $(d.d[i]) alpha: $(alpha2[i])\n")
+        #print("d: $(d.d[i]) alpha: $(alpha2[i])\n")
         if ((d.variableState[i] == AtLower && alpha2[i] > pivotTol) || (d.variableState[i] == AtUpper && alpha2[i] < -pivotTol) || (d.variableState[i] == Free && (alpha2[i] > pivotTol || alpha2[i] < -pivotTol)))
             ratio = 0.
             if (alpha2[i] < 0.)
@@ -310,7 +314,7 @@ function dualRatioTest(d::dualSimplexData,alpha2)
             end
         end
     end
-    print("$ncandidates candidates, thetaMax = $thetaMax\n")
+    #print("$ncandidates candidates, thetaMax = $thetaMax\n")
 
     # pass 2
     enter = -1
@@ -351,6 +355,11 @@ function iterate(d::dualSimplexData)
     rho = zeros(nrow)
     rho[leave] = 1.
     rho = d.factor'\rho
+    #print("rho: ")
+    #for bob in rho
+    #    print(bob," ")
+    #end
+    #println()
 
     alpha = zeros(ncol+nrow)
     # todo: put in PRICE function
@@ -362,6 +371,7 @@ function iterate(d::dualSimplexData)
         for k in d.data.A.colptr[i]:(d.data.A.colptr[i+1]-1)
             val += rho[d.data.A.rowval[k]]*d.data.A.nzval[k]
         end
+        #println("val: ",i,": ",val)
         alpha[i] = val
     end
     for i in 1:nrow
@@ -370,6 +380,7 @@ function iterate(d::dualSimplexData)
             continue
         end
         alpha[k] = -rho[i]
+        #println("val: ",k,": ",alpha[k])
     end
 
     if leaveType == Below
@@ -387,7 +398,7 @@ function iterate(d::dualSimplexData)
         return
     end
 
-    print("enter: $enterIdx leave: $leaveIdx delta: $delta\n")
+    #print("enter: $enterIdx leave: $leaveIdx delta: $delta\n")
 
     # TODO: do updates
 
@@ -419,6 +430,48 @@ function go(d::dualSimplexData)
         if (d.status == Optimal)
             break
         end
+        if (d.status != DualFeasible)
+            perturbForFeasibility(d)
+        end
+    end
+
+    d.c = copy(d.data.c)
+    initialize(d,true)
+    if (d.status != Optimal)
+        println("Oops, lost optimality after removing perturbations")
+        # TODO: switch to primal simplex
+    end
+
+end
+
+function perturbForFeasibility(d::dualSimplexData)
+    nrow,ncol = size(d.data.A)
+    didflip = false
+    for i in 1:(ncol+nrow)
+        if (d.variableState[i] == Basic) 
+            continue 
+        end
+        if (d.variableState[i] == AtLower || d.data.boundClass[i] == Free)
+            if (d.d[i] < -d.dualTol)
+                delta = -d.d[i]-d.dualTol
+                d.c[i] += delta
+                d.d[i] = -d.dualTol
+            end
+        end
+        if (d.variableState[i] == AtUpper || d.data.boundClass[i] == Free)
+            if (d.d[i] > d.dualTol)
+                delta = -d.d[i]+d.dualTol
+                d.c[i] += delta
+                d.d[i] = d.dualTol
+            end
+        end
+    end
+
+    if (d.status == Initialized)
+        d.status = DualFeasible
+    else
+        @assert d.status == PrimalFeasible
+        d.status = Optimal
     end
 
 end
@@ -448,10 +501,12 @@ function makeFeasible(d::dualSimplexData)
             d2.data.l[i] = 0.
             d2.data.u[i] = 0.
             d2.data.boundClass[i] = Fixed
-        elseif (t == LB) 
+        elseif (t == LB)
+            assert(d.data.u[i] == typemax(Float64))
             d2.data.l[i] = 0.
             d2.data.u[i] = 1.
         elseif (t == UB)
+            assert(d.data.l[i] == typemin(Float64))
             d2.data.l[i] = -1.
             d2.data.u[i] = 0.
         elseif (t == Free)
@@ -463,8 +518,17 @@ function makeFeasible(d::dualSimplexData)
     @assert d2.status == Optimal
     ## TODO: fix for FINNIS
     d.variableState = d2.variableState
+    for i in 1:(nrow+ncol)
+        t = d.data.boundClass[i]
+        if (d.variableState[i] == AtLower && t == UB)
+            println("oops need to flip")
+        elseif (d.variableState[i] == AtUpper && t == LB)
+            println("oops need to flip2")
+        end
+    end
     d.c = d2.c
     initialize(d,true)
+    flipBounds(d)
 
 
 end
@@ -509,7 +573,6 @@ function LPDataFromMPS(mpsfile::String)
     nrow::Int = glp_get_num_rows(lp)
     nrow = nrow - 1 # gkpk wtf
     ncol::Int = glp_get_num_cols(lp)
-    print("$nrow ROWS!\n")
     
     index1 = Array(Int32,nrow)
     coef1 = Array(Float64,nrow)
@@ -527,7 +590,6 @@ function LPDataFromMPS(mpsfile::String)
     u = Array(Float64,nrow)
     for i in 1:ncol
         c[i] = glp_get_obj_coef(lp,i)
-        print("$i $(c[i])\n")
         t = glp_get_col_type(lp,i)
         if t == GLP_FR
             xlb[i] = typemin(Float64)
@@ -544,33 +606,46 @@ function LPDataFromMPS(mpsfile::String)
         end
     end
 
+    objname = glp_get_obj_name(lp)
+    glp_create_index(lp)
+    objrow = glp_find_row(lp,objname)
+    println("objective is in row $objrow")
+
     for i in 1:nrow
-        t = glp_get_row_type(lp,i)
+        reali = i
+        if (i >= objrow)
+            reali += 1
+        end
+        t = glp_get_row_type(lp,reali)
         if t == GLP_UP
             l[i] = typemin(Float64)
-            u[i] = glp_get_row_ub(lp,i)
+            u[i] = glp_get_row_ub(lp,reali)
         elseif t == GLP_LO
-            l[i] = glp_get_row_lb(lp,i)
+            l[i] = glp_get_row_lb(lp,reali)
             u[i] = typemax(Float64)
         elseif t == GLP_DB || t == GLP_FX
-            l[i] = glp_get_row_lb(lp,i)
-            u[i] = glp_get_row_ub(lp,i)
+            l[i] = glp_get_row_lb(lp,reali)
+            u[i] = glp_get_row_ub(lp,reali)
         end
     end
 
+    
+    sel = Array(Bool,nrow)
     for i in 1:ncol
         starts[i] = nnz+1
         nnz1 = glp_get_mat_col(lp,i,index1,coef1)
-        if index1[nnz1] == nrow+1
-            nnz1 -= 1 # glpk wtf
-        end
-
-        print("vec $(i-1) has length $nnz1 with entries:\n")
+        sel[:] = false
         for k in 1:nnz1
-            print("\t\t$(index1[k]-1)\t\t$(coef1[k])\n")
+            if (index1[k] != objrow)
+                sel[k] = true
+            end
+            if (index1[k] > objrow)
+                index1[k] -= 1
+            end
         end
-        idx = [idx,index1[1:nnz1]]
-        elt = [elt,coef1[1:nnz1]]
+        nnz1 = sum(sel)
+        idx = [idx,index1[sel]]
+        elt = [elt,coef1[sel]]
         nnz += nnz1
     end
     starts[ncol+1] = nnz+1
