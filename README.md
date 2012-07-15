@@ -11,7 +11,7 @@ This is not a textbook implementation and contains some advanced features that a
 
 For the expert audience, here's what's needed before we can compete with state-of-the-art implementations:
 - Bound-flipping ratio test
-- Internal rescaling and anti-generacy perturbations
+- Internal rescaling and anti-degeneracy perturbations
 - Primal simplex implementation (for clean up)
 - Markowitz-type LU factorization
 - Suhl-Suhl (Forrest-Tomlin)-style updates
@@ -21,7 +21,7 @@ For the expert audience, here's what's needed before we can compete with state-o
 There is no reason to use this code to solve real problems. It's here as a proof of concept of a large, complex application in Julia. Both algorithmic and performance-tuning contributions are welcome. 
 
 Current timings for test.jl solving GREENBEA.SIF on a desktop (Intel Core2 Q8400):
-jlSimplex: 48 seconds
-GLPK: 2.3 seconds
+- jlSimplex: 48 seconds
+- GLPK: 2.3 seconds
 
 jlSimplex is released under the terms of the MIT license.
