@@ -9,8 +9,6 @@ type PackedEtaVector
     pivotalIndex::Int64
 end
 
-# Array(PackedEntry,1)[1]
-
 function PackedEtaVector(v::Vector{Float64},pivotalIndex)
     
     n = length(v)

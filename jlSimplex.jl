@@ -72,7 +72,7 @@ function LPData(c,xlb,xub,l,u,A)
 end
 
 
-type dualSimplexData
+type DualSimplexData
 
     data::LPData
     c::Vector{Float64} # may be perturbed
@@ -99,18 +99,18 @@ type dualSimplexData
 
 end
 
-function copy(d::dualSimplexData)
-    dualSimplexData(copy(d.data),copy(d.c),d.nIter,copy(d.basicIdx),copy(d.variableState),d.status,copy(d.x),copy(d.d),copy(d.dse),d.objval,d.phase1,d.didperturb,d.dualTol,d.primalTol,d.zeroTol,d.factor)
+function copy(d::DualSimplexData)
+    DualSimplexData(copy(d.data),copy(d.c),d.nIter,copy(d.basicIdx),copy(d.variableState),d.status,copy(d.x),copy(d.d),copy(d.dse),d.objval,d.phase1,d.didperturb,d.dualTol,d.primalTol,d.zeroTol,d.factor)
 end
 
-function dualSimplexData(d::LPData)
+function DualSimplexData(d::LPData)
     nrow,ncol = size(d.A)
     state = Array(VariableState,ncol+nrow) # slack basis
     state[ncol+1:nrow+ncol] = Basic
     state[1:ncol] = AtLower
     state[1:ncol][d.boundClass[1:ncol] .== UB] = AtUpper
 
-    return dualSimplexData(d,copy(d.c),
+    return DualSimplexData(d,copy(d.c),
         0, Array(Int,nrow),state,Uninitialized,
         Array(Float64,nrow+ncol),
         Array(Float64,nrow+ncol),
@@ -209,14 +209,11 @@ function initialize(d,reinvert::Bool)
         end
         infeas = false
         if (d.data.boundClass[i] == Free && (d.d[i] <-d.dualTol || d.d[i] >d.dualTol))
-            #println("$i infeas1")
             infeas=true
         elseif (d.variableState[i] == AtLower && d.d[i] < -d.dualTol && d.data.boundClass[i] != Fixed)
             infeas=true
-            #println("$i infeas2")
         elseif (d.variableState[i] == AtUpper && d.d[i] > d.dualTol && d.data.boundClass[i] != Fixed)
             infeas=true
-            #println("$i inteas3")
         end
         if (infeas)
             dualinfeas += abs(d.d[i])
@@ -263,7 +260,7 @@ function initialize(d,reinvert::Bool)
 end
 
 
-function dualEdgeSelection(d::dualSimplexData)
+function dualEdgeSelection(d::DualSimplexData)
     nrow,ncol = size(d.data.A)
 
     rmax::Float64 = 0.
@@ -287,7 +284,7 @@ function dualEdgeSelection(d::dualSimplexData)
 end
 
 # two-pass "Harris" ratio test
-function dualRatioTest(d::dualSimplexData,alpha2)
+function dualRatioTest(d::DualSimplexData,alpha2)
     nrow,ncol = size(d.data.A)
 
     candidates = zeros(Int,ncol)
@@ -333,7 +330,7 @@ function dualRatioTest(d::dualSimplexData,alpha2)
     return enter # -1 means unbounded
 end
 
-function iterate(d::dualSimplexData)
+function iterate(d::DualSimplexData)
     nrow,ncol = size(d.data.A)
     @assert (d.status == DualFeasible || d.status == Optimal)
 
@@ -357,14 +354,9 @@ function iterate(d::dualSimplexData)
     rho = zeros(nrow)
     rho[leave] = 1.
     rho = d.factor'\rho
-    #print("rho: ")
-    #for bob in rho
-    #    print(bob," ")
-    #end
-    #println()
 
     alpha = zeros(ncol+nrow)
-    # todo: put in PRICE function
+    # todo: put in PRICE function (mat-vec)
     for i in 1:ncol
         if (d.variableState[i] == Basic)
             continue
@@ -401,8 +393,6 @@ function iterate(d::dualSimplexData)
     end
 
     #print("enter: $enterIdx leave: $leaveIdx delta: $delta\n")
-
-    # TODO: do updates
 
     if (d.d[enterIdx]/alpha[enterIdx] < 0.)
         thetad = sign(delta)*1e-12
@@ -450,7 +440,7 @@ function iterate(d::dualSimplexData)
 
 end
 
-function updateDuals(d::dualSimplexData,tableauRow::Vector{Float64},leaveIdx,enterIdx,thetad::Float64)
+function updateDuals(d::DualSimplexData,tableauRow::Vector{Float64},leaveIdx,enterIdx,thetad::Float64)
     nrow,ncol = size(d.data.A)
     d.d[leaveIdx] = -thetad
     d.d[enterIdx] = 0.
@@ -489,7 +479,7 @@ function updateDuals(d::dualSimplexData,tableauRow::Vector{Float64},leaveIdx,ent
 
 end
 
-function updatePrimals(d::dualSimplexData,tableauColumn,enterIdx,leave,thetap)
+function updatePrimals(d::DualSimplexData,tableauColumn,enterIdx,leave,thetap)
     nrow,ncol = size(d.data.A)
     for i in 1:nrow
         idx = d.basicIdx[i]
@@ -498,7 +488,7 @@ function updatePrimals(d::dualSimplexData,tableauColumn,enterIdx,leave,thetap)
     d.x[enterIdx] += thetap
 end
 
-function updateDSE(d::dualSimplexData,rho,tableauColumn,enterIdx,pivot)
+function updateDSE(d::DualSimplexData,rho,tableauColumn,enterIdx,pivot)
     nrow,ncol = size(d.data.A)
     dseEnter = dot(rho,rho)/pivot/pivot
     tau = d.factor\rho
@@ -513,7 +503,7 @@ function updateDSE(d::dualSimplexData,rho,tableauColumn,enterIdx,pivot)
 
 end
 
-function go(d::dualSimplexData)
+function go(d::DualSimplexData)
     if (d.status == Uninitialized)
         initialize(d,true)
     end
@@ -523,9 +513,9 @@ function go(d::dualSimplexData)
         makeFeasible(d)
     end
     
-    for r in 1:100000
+    for r in 1:100000 # iteration limit
         iterate(d)
-        if (d.nIter % 20 == 0) 
+        if (d.nIter % 20 == 0) # reinversion frequency
             initialize(d,true)
         end
         if (d.status == Optimal)
@@ -546,7 +536,7 @@ function go(d::dualSimplexData)
 
 end
 
-function perturbForFeasibility(d::dualSimplexData)
+function perturbForFeasibility(d::DualSimplexData)
     nrow,ncol = size(d.data.A)
     didflip = false
     for i in 1:(ncol+nrow)
@@ -578,7 +568,7 @@ function perturbForFeasibility(d::dualSimplexData)
 
 end
 
-function makeFeasible(d::dualSimplexData)
+function makeFeasible(d::DualSimplexData)
     nrow,ncol = size(d.data.A)
     
     if (d.status == DualFeasible)
@@ -618,14 +608,16 @@ function makeFeasible(d::dualSimplexData)
     end
     go(d2)
     @assert d2.status == Optimal
-    ## TODO: fix for FINNIS
     d.variableState = d2.variableState
+    # Fix degeneracy in Phase I solution (occurs with FINNIS)
     for i in 1:(nrow+ncol)
         t = d.data.boundClass[i]
         if (d.variableState[i] == AtLower && t == UB)
-            println("oops need to flip")
+            d.variableState[i] = AtUpper
+            @assert d2.d[i] <= d.dualTol
         elseif (d.variableState[i] == AtUpper && t == LB)
-            println("oops need to flip2")
+            d.variableState[i] = AtLower
+            @assert d2.d[i] >= -d.dualTol
         end
     end
     d.c = d2.c
@@ -637,7 +629,7 @@ function makeFeasible(d::dualSimplexData)
 
 end
 
-function flipBounds(d::dualSimplexData)
+function flipBounds(d::DualSimplexData)
     nrow,ncol = size(d.data.A)
     didflip = false
     for i in 1:(ncol+nrow)
@@ -683,7 +675,7 @@ function LPDataFromMPS(mpsfile::String)
     ret = glp_read_mps(lp,GLP_MPS_FILE,C_NULL,mpsfile)
     @assert ret == 0
     nrow::Int = glp_get_num_rows(lp)
-    nrow = nrow - 1 # gkpk wtf
+    nrow = nrow - 1 # gkpk puts the objective row in the constraint matrix, dunno why... 
     ncol::Int = glp_get_num_cols(lp)
     
     index1 = Array(Int32,nrow)
@@ -721,7 +713,6 @@ function LPDataFromMPS(mpsfile::String)
     objname = glp_get_obj_name(lp)
     glp_create_index(lp)
     objrow = glp_find_row(lp,objname)
-    println("objective is in row $objrow")
 
     for i in 1:nrow
         reali = i
