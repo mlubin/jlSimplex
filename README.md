@@ -1,7 +1,7 @@
 jlSimplex
 =========
 
-Proof-of-concept implementation of the (dual) simplex algorithm in Julia. It's not guaranteed to solve your problem, but it can solve some NETLIB instances.
+Proof-of-concept implementation of the (dual) simplex algorithm for linear programming in Julia. It's not guaranteed to solve your problem, but it can solve some NETLIB instances.
 
 This is not a textbook implementation and contains some advanced features that are important for practical implementations, such as:
 - Stabilizing 2-pass ratio test
