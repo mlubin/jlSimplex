@@ -675,7 +675,7 @@ function LPDataFromMPS(mpsfile::String)
     ret = glp_read_mps(lp,GLP_MPS_FILE,C_NULL,mpsfile)
     @assert ret == 0
     nrow::Int = glp_get_num_rows(lp)
-    nrow = nrow - 1 # gkpk puts the objective row in the constraint matrix, dunno why... 
+    nrow = nrow - 1 # glpk puts the objective row in the constraint matrix, dunno why... 
     ncol::Int = glp_get_num_cols(lp)
     
     index1 = Array(Int32,nrow)
