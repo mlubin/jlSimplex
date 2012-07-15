@@ -1,6 +1,9 @@
 load("jlSimplex.jl")
 
-d = dualSimplexData(LPDataFromMPS("AFIRO.SIF"))
+mpsfile = "GREENBEA.SIF"
+d = dualSimplexData(LPDataFromMPS(mpsfile));
+@time go(d)
 
-go(d)
+println("Now with glpk:")
+SolveMPSWithGLPK(mpsfile)
 

@@ -1,7 +1,6 @@
-load("sparse.jl")
-load("linalg_sparse.jl")
-load("linalg_suitesparse.jl")
+load("pfi.jl")
 load("glpk.jl") # for reading MPS
+#load("profile.jl")
 
 typealias ConstraintType Int # why no enum...
 typealias VariableState Int
@@ -109,7 +108,7 @@ function dualSimplexData(d::LPData)
     state = Array(VariableState,ncol+nrow) # slack basis
     state[ncol+1:nrow+ncol] = Basic
     state[1:ncol] = AtLower
-    state[d.boundClass[1:ncol] .== UB] = AtUpper
+    state[1:ncol][d.boundClass[1:ncol] .== UB] = AtUpper
 
     return dualSimplexData(d,copy(d.c),
         0, Array(Int,nrow),state,Uninitialized,
@@ -119,6 +118,7 @@ function dualSimplexData(d::LPData)
         0.,false,false,1e-6,1e-6,1e-12,0)
 end
 
+#@profile begin
 
 function initialize(d,reinvert::Bool) 
     nrow,ncol = size(d.data.A)
@@ -133,7 +133,7 @@ function initialize(d,reinvert::Bool)
         @assert length(colptr) == nrow+1
         rowval = [ structural.rowval[1:nnz(structural)], slacks-ncol ]
         nzval = [ structural.nzval[1:nnz(structural)], -ones(length(slacks)) ]
-        d.factor = UmfpackLU!(SparseMatrixCSC(nrow,nrow,colptr,rowval,nzval))
+        d.factor = PFIManager(SparseMatrixCSC(nrow,nrow,colptr,rowval,nzval))
     end
 
     for i in 1:(nrow+ncol)
@@ -346,8 +346,10 @@ function iterate(d::dualSimplexData)
     leaveType = 0
     if (d.x[leaveIdx] > d.data.u[leaveIdx])
         leaveType = Above
+        delta = d.x[leaveIdx]-d.data.u[leaveIdx]
     elseif (d.x[leaveIdx] < d.data.l[leaveIdx])
         leaveType = Below
+        delta = d.x[leaveIdx]-d.data.l[leaveIdx]
     else
         @assert false
     end
@@ -402,6 +404,40 @@ function iterate(d::dualSimplexData)
 
     # TODO: do updates
 
+    if (d.d[enterIdx]/alpha[enterIdx] < 0.)
+        thetad = sign(delta)*1e-12
+        diff = thetad*alpha[enterIdx] - d.d[enterIdx]
+        d.d[enterIdx] = thetad*alpha[enterIdx]
+        d.c[enterIdx] += diff
+    else
+        thetad = sign(delta)*d.d[enterIdx]/alpha[enterIdx]
+    end
+    
+    if leaveType == Below
+        alpha = -alpha
+    end
+
+    updateDuals(d,alpha,leaveIdx,enterIdx,thetad)
+
+
+    if (enterIdx <= ncol) # structural
+        rhs = convert(Matrix{Float64},d.data.A[:,enterIdx])[:,1]
+    else
+        rhs = zeros(nrow)
+        rhs[enterIdx - ncol] = -1.
+    end
+        
+    aq = d.factor\rhs
+
+    thetap = delta/aq[leave]
+
+    updatePrimals(d,aq,enterIdx,leave,thetap)
+    updateDSE(d,rho,aq,enterIdx,aq[leave])
+
+    replaceColumn(d.factor,aq,leave)
+
+
+    d.basicIdx[leave] = enterIdx
     d.variableState[enterIdx] = Basic
     if leaveType == Below
         d.x[leaveIdx] = d.data.l[leaveIdx]
@@ -411,6 +447,69 @@ function iterate(d::dualSimplexData)
         d.variableState[leaveIdx] = AtUpper
     end
 
+
+end
+
+function updateDuals(d::dualSimplexData,tableauRow::Vector{Float64},leaveIdx,enterIdx,thetad::Float64)
+    nrow,ncol = size(d.data.A)
+    d.d[leaveIdx] = -thetad
+    d.d[enterIdx] = 0.
+
+    for i in 1:(nrow+ncol)
+        if d.variableState[i] == Basic || i == enterIdx
+            continue
+        end
+        dnew = d.d[i] - thetad*tableauRow[i]
+        if d.data.boundClass[i] == Fixed
+            d.d[i] = dnew
+            continue
+        end
+
+        # deal with infeasibilities using cost shifting
+        if (d.variableState[i] == AtLower || d.data.boundClass[i] == Free) 
+            if (dnew >= -d.dualTol) 
+                d.d[i] = dnew
+            else
+                delta = -dnew-d.dualTol
+                d.c[i] += delta
+                d.d[i] = -d.dualTol
+            end
+        end
+        if (d.variableState[i] == AtUpper || d.data.boundClass[i] == Free)
+            if (dnew <= d.dualTol)
+                d.d[i] = dnew
+            else
+                delta = -dnew+d.dualTol
+                d.c[i] += delta
+                d.d[i] = d.dualTol
+            end
+        end
+    end
+
+
+end
+
+function updatePrimals(d::dualSimplexData,tableauColumn,enterIdx,leave,thetap)
+    nrow,ncol = size(d.data.A)
+    for i in 1:nrow
+        idx = d.basicIdx[i]
+        d.x[idx] -= thetap*tableauColumn[i]
+    end
+    d.x[enterIdx] += thetap
+end
+
+function updateDSE(d::dualSimplexData,rho,tableauColumn,enterIdx,pivot)
+    nrow,ncol = size(d.data.A)
+    dseEnter = dot(rho,rho)/pivot/pivot
+    tau = d.factor\rho
+    
+    kappa = -2.0/pivot
+    for i in 1:nrow
+        idx = d.basicIdx[i]
+        d.dse[idx] += tableauColumn[i]*(tableauColumn[i]*dseEnter + kappa*tau[i])
+        d.dse[idx] = max(d.dse[idx],1e-4)
+    end
+    d.dse[enterIdx] = dseEnter
 
 end
 
@@ -424,15 +523,18 @@ function go(d::dualSimplexData)
         makeFeasible(d)
     end
     
-    for d.nIter in 1:100000
+    for r in 1:100000
         iterate(d)
-        initialize(d,true)
+        if (d.nIter % 20 == 0) 
+            initialize(d,true)
+        end
         if (d.status == Optimal)
             break
         end
         if (d.status != DualFeasible)
             perturbForFeasibility(d)
         end
+        d.nIter += 1
     end
 
     d.c = copy(d.data.c)
@@ -527,6 +629,8 @@ function makeFeasible(d::dualSimplexData)
         end
     end
     d.c = d2.c
+    d.dse = d2.dse
+    d.nIter = d2.nIter
     initialize(d,true)
     flipBounds(d)
 
@@ -564,6 +668,14 @@ function flipBounds(d::dualSimplexData)
 end
 
 
+#end # @profile begin
+
+function SolveMPSWithGLPK(mpsfile::String)
+    lp = GLPProb()
+    ret = glp_read_mps(lp,GLP_MPS_FILE,C_NULL,mpsfile)
+    @assert ret == 0
+    @time glp_simplex(lp)
+end
 
 function LPDataFromMPS(mpsfile::String) 
 
@@ -656,3 +768,4 @@ function LPDataFromMPS(mpsfile::String)
 
 
 end
+
