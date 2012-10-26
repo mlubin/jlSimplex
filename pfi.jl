@@ -1,6 +1,6 @@
 load("sparse.jl")
 load("linalg_sparse.jl")
-load("linalg_suitesparse.jl")
+load("suitesparse.jl")
 
 type PackedEtaVector
     elts::Vector{Float64}

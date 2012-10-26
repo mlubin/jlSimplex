@@ -71,6 +71,25 @@ function LPData(c,xlb,xub,l,u,A)
     return LPData([c,zeros(nrow)],[xlb,l],[xub,u],vt,A)
 end
 
+type Timings
+    matvec::Float64
+    ratiotest::Float64
+    scan::Float64
+    ftran::Float64
+    btran::Float64
+    ftran2::Float64
+    factor::Float64
+    updatefactor::Float64
+    updateiters::Float64
+end
+
+function Timings()
+    Timings(0.,0.,0.,0.,0.,0.,0.,0.,0.)
+end
+
+function show(io,t::Timings)
+    print(io,"matvec: $(t.matvec)\nratio test: $(t.ratiotest) \nscan: $(t.scan)\nftran: $(t.ftran)\nbtran: $(t.btran)\nftran2: $(t.ftran)\nfactor: $(t.factor)\nupdate factor: $(t.updatefactor)\nupdate iterates: $(t.updateiters)")
+end
 
 type DualSimplexData
 
@@ -95,12 +114,13 @@ type DualSimplexData
     zeroTol::Float64
 
     factor
+    timings::Timings
         
 
 end
 
 function copy(d::DualSimplexData)
-    DualSimplexData(copy(d.data),copy(d.c),d.nIter,copy(d.basicIdx),copy(d.variableState),d.status,copy(d.x),copy(d.d),copy(d.dse),d.objval,d.phase1,d.didperturb,d.dualTol,d.primalTol,d.zeroTol,d.factor)
+    DualSimplexData(copy(d.data),copy(d.c),d.nIter,copy(d.basicIdx),copy(d.variableState),d.status,copy(d.x),copy(d.d),copy(d.dse),d.objval,d.phase1,d.didperturb,d.dualTol,d.primalTol,d.zeroTol,d.factor,d.timings)
 end
 
 function DualSimplexData(d::LPData)
@@ -115,7 +135,7 @@ function DualSimplexData(d::LPData)
         Array(Float64,nrow+ncol),
         Array(Float64,nrow+ncol),
         ones(nrow+ncol), # DSE
-        0.,false,false,1e-6,1e-6,1e-12,0)
+        0.,false,false,1e-6,1e-6,1e-12,0,Timings())
 end
 
 #@profile begin
@@ -133,7 +153,9 @@ function initialize(d,reinvert::Bool)
         @assert length(colptr) == nrow+1
         rowval = [ structural.rowval[1:nnz(structural)], slacks-ncol ]
         nzval = [ structural.nzval[1:nnz(structural)], -ones(length(slacks)) ]
+        t = time()
         d.factor = PFIManager(SparseMatrixCSC(nrow,nrow,colptr,rowval,nzval))
+        d.timings.factor += time() - t
     end
 
     for i in 1:(nrow+ncol)
@@ -330,11 +352,39 @@ function dualRatioTest(d::DualSimplexData,alpha2)
     return enter # -1 means unbounded
 end
 
+# matvec of nonbasic columns with rho vector, answer goes in alpha
+function price(A::SparseMatrixCSC{Float64,Int64},variableState::Vector{VariableState},rho::Vector{Float64},alpha::Vector{Float64})
+    nrow,ncol = size(A)
+    
+    for i in 1:ncol
+        if (variableState[i] == Basic)
+            continue
+        end
+        val = 0.
+        for k in A.colptr[i]:(A.colptr[i+1]-1)
+            val += rho[A.rowval[k]]*A.nzval[k]
+        end
+        #println("val: ",i,": ",val)
+        alpha[i] = val
+    end
+    for i in 1:nrow
+        k = i+ncol
+        if (variableState[k] == Basic)
+            continue
+        end
+        alpha[k] = -rho[i]
+        #println("val: ",k,": ",alpha[k])
+    end
+
+end
+
 function iterate(d::DualSimplexData)
     nrow,ncol = size(d.data.A)
     @assert (d.status == DualFeasible || d.status == Optimal)
 
+    t = time()
     leave = dualEdgeSelection(d)
+    d.timings.scan += time() - t
     if (leave == -1)
         d.status = Optimal
         return
@@ -353,29 +403,15 @@ function iterate(d::DualSimplexData)
 
     rho = zeros(nrow)
     rho[leave] = 1.
+    t = time()
     rho = d.factor'\rho
+    d.timings.btran += time() - t
 
     alpha = zeros(ncol+nrow)
     # todo: put in PRICE function (mat-vec)
-    for i in 1:ncol
-        if (d.variableState[i] == Basic)
-            continue
-        end
-        val = 0.
-        for k in d.data.A.colptr[i]:(d.data.A.colptr[i+1]-1)
-            val += rho[d.data.A.rowval[k]]*d.data.A.nzval[k]
-        end
-        #println("val: ",i,": ",val)
-        alpha[i] = val
-    end
-    for i in 1:nrow
-        k = i+ncol
-        if (d.variableState[k] == Basic)
-            continue
-        end
-        alpha[k] = -rho[i]
-        #println("val: ",k,": ",alpha[k])
-    end
+    t = time()
+    price(d.data.A,d.variableState,rho,alpha)
+    d.timings.matvec += time() - t
 
     if leaveType == Below
         alpha = -alpha
@@ -384,7 +420,9 @@ function iterate(d::DualSimplexData)
     delta = (leaveType == Below) ? (d.x[leaveIdx] - d.data.l[leaveIdx]) : (d.x[leaveIdx] - d.data.u[leaveIdx])
     absdelta = abs(delta)
 
+    t = time()
     enterIdx = dualRatioTest(d,alpha)
+    d.timings.ratiotest += time() - t
     if enterIdx == -1
         print("unbounded?")
         d.status = Unbounded
@@ -407,8 +445,9 @@ function iterate(d::DualSimplexData)
         alpha = -alpha
     end
 
+    t = time()
     updateDuals(d,alpha,leaveIdx,enterIdx,thetad)
-
+    d.timings.updateiters += time() - t
 
     if (enterIdx <= ncol) # structural
         rhs = convert(Matrix{Float64},d.data.A[:,enterIdx])[:,1]
@@ -416,16 +455,21 @@ function iterate(d::DualSimplexData)
         rhs = zeros(nrow)
         rhs[enterIdx - ncol] = -1.
     end
-        
+    
+    t = time()
     aq = d.factor\rhs
+    d.timings.ftran += time() - t
 
     thetap = delta/aq[leave]
-
+    
+    t = time()
     updatePrimals(d,aq,enterIdx,leave,thetap)
+    d.timings.updateiters += time()-t
     updateDSE(d,rho,aq,enterIdx,aq[leave])
 
+    t = time()
     replaceColumn(d.factor,aq,leave)
-
+    d.timings.updatefactor += time() - t
 
     d.basicIdx[leave] = enterIdx
     d.variableState[enterIdx] = Basic
@@ -488,18 +532,26 @@ function updatePrimals(d::DualSimplexData,tableauColumn,enterIdx,leave,thetap)
     d.x[enterIdx] += thetap
 end
 
-function updateDSE(d::DualSimplexData,rho,tableauColumn,enterIdx,pivot)
+function updateDSE(d::DualSimplexData,rho,tableauColumn::Vector{Float64},enterIdx,pivot::Float64)
     nrow,ncol = size(d.data.A)
-    dseEnter = dot(rho,rho)/pivot/pivot
+    dseEnter::Float64 = dot(rho,rho)/pivot/pivot
+    t = time()
     tau = d.factor\rho
+    d.timings.ftran2 += t-time()
+    t = time()
     
     kappa = -2.0/pivot
     for i in 1:nrow
         idx = d.basicIdx[i]
+        if (tableauColumn[i] == 0.) 
+            continue
+        end
         d.dse[idx] += tableauColumn[i]*(tableauColumn[i]*dseEnter + kappa*tau[i])
         d.dse[idx] = max(d.dse[idx],1e-4)
     end
     d.dse[enterIdx] = dseEnter
+
+    d.timings.updateiters += time()-t
 
 end
 
@@ -532,6 +584,9 @@ function go(d::DualSimplexData)
     if (d.status != Optimal)
         println("Oops, lost optimality after removing perturbations")
         # TODO: switch to primal simplex
+    end
+    if (!d.phase1) 
+        println(d.timings)
     end
 
 end
@@ -623,6 +678,7 @@ function makeFeasible(d::DualSimplexData)
     d.c = d2.c
     d.dse = d2.dse
     d.nIter = d2.nIter
+    d.timings = d2.timings
     initialize(d,true)
     flipBounds(d)
 
