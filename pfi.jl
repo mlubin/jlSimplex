@@ -80,11 +80,8 @@ function (\)(pfi::PFIManager,v::Vector{Float64})
 end
 
 function Ac_ldiv_B(pfi::PFIManager,v::Vector{Float64})
-    # what's the syntax for a range with negative increments?
-    i = pfi.npfi
-    while i > 0
+    for i = pfi.npfi:-1:1
         applyRowEta(pfi.etas[i],v)
-        i -= 1
     end
 
     return pfi.origFactor'\v
