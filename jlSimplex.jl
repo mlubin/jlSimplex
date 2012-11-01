@@ -319,7 +319,7 @@ function dualRatioTest(d::DualSimplexData,alpha2)
             continue
         end
         #print("d: $(d.d[i]) alpha: $(alpha2[i])\n")
-        if ((d.variableState[i] == AtLower && alpha2[i] > pivotTol) || (d.variableState[i] == AtUpper && alpha2[i] < -pivotTol) || (d.variableState[i] == Free && (alpha2[i] > pivotTol || alpha2[i] < -pivotTol)))
+        if ((d.variableState[i] == AtLower && alpha2[i] > pivotTol) || (d.variableState[i] == AtUpper && alpha2[i] < -pivotTol) || (d.data.boundClass[i] == Free && (alpha2[i] > pivotTol || alpha2[i] < -pivotTol)))
             ratio = 0.
             if (alpha2[i] < 0.)
                 ratio = (d.d[i] - d.dualTol)/alpha2[i]
