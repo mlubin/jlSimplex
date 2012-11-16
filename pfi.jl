@@ -1,3 +1,4 @@
+import Base.Ac_ldiv_B, Base.(\), Base.dot
 load("sparse.jl")
 load("linalg_sparse.jl")
 load("suitesparse.jl")

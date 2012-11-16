@@ -1,5 +1,6 @@
 load("pfi.jl")
 load("glpk.jl") # for reading MPS
+import GLPK
 #load("profile.jl")
 
 typealias ConstraintType Int # why no enum...
@@ -719,20 +720,20 @@ end
 #end # @profile begin
 
 function SolveMPSWithGLPK(mpsfile::String)
-    lp = GLPProb()
-    ret = glp_read_mps(lp,GLP_MPS_FILE,C_NULL,mpsfile)
+    lp = GLPK.Prob()
+    ret = GLPK.read_mps(lp,GLPK.MPS_FILE,C_NULL,mpsfile)
     @assert ret == 0
-    @time glp_simplex(lp)
+    @time GLPK.simplex(lp)
 end
 
 function LPDataFromMPS(mpsfile::String) 
 
-    lp = GLPProb()
-    ret = glp_read_mps(lp,GLP_MPS_FILE,C_NULL,mpsfile)
+    lp = GLPK.Prob()
+    ret = GLPK.read_mps(lp,GLPK.MPS_FILE,C_NULL,mpsfile)
     @assert ret == 0
-    nrow::Int = glp_get_num_rows(lp)
+    nrow::Int = GLPK.get_num_rows(lp)
     nrow = nrow - 1 # glpk puts the objective row in the constraint matrix, dunno why... 
-    ncol::Int = glp_get_num_cols(lp)
+    ncol::Int = GLPK.get_num_cols(lp)
     
     index1 = Array(Int32,nrow)
     coef1 = Array(Float64,nrow)
@@ -749,42 +750,42 @@ function LPDataFromMPS(mpsfile::String)
     l = Array(Float64,nrow)  
     u = Array(Float64,nrow)
     for i in 1:ncol
-        c[i] = glp_get_obj_coef(lp,i)
-        t = glp_get_col_type(lp,i)
-        if t == GLP_FR
+        c[i] = GLPK.get_obj_coef(lp,i)
+        t = GLPK.get_col_type(lp,i)
+        if t == GLPK.FR
             xlb[i] = typemin(Float64)
             xub[i] = typemax(Float64)
-        elseif t == GLP_UP
+        elseif t == GLPK.UP
             xlb[i] = typemin(Float64)
-            xub[i] = glp_get_col_ub(lp,i)
-        elseif t == GLP_LO
-            xlb[i] = glp_get_col_lb(lp,i)
+            xub[i] = GLPK.get_col_ub(lp,i)
+        elseif t == GLPK.LO
+            xlb[i] = GLPK.get_col_lb(lp,i)
             xub[i] = typemax(Float64)
-        elseif t == GLP_DB || t == GLP_FX
-            xlb[i] = glp_get_col_lb(lp,i)
-            xub[i] = glp_get_col_ub(lp,i)
+        elseif t == GLPK.DB || t == GLPK.FX
+            xlb[i] = GLPK.get_col_lb(lp,i)
+            xub[i] = GLPK.get_col_ub(lp,i)
         end
     end
 
-    objname = glp_get_obj_name(lp)
-    glp_create_index(lp)
-    objrow = glp_find_row(lp,objname)
+    objname = GLPK.get_obj_name(lp)
+    GLPK.create_index(lp)
+    objrow = GLPK.find_row(lp,objname)
 
     for i in 1:nrow
         reali = i
         if (i >= objrow)
             reali += 1
         end
-        t = glp_get_row_type(lp,reali)
-        if t == GLP_UP
+        t = GLPK.get_row_type(lp,reali)
+        if t == GLPK.UP
             l[i] = typemin(Float64)
-            u[i] = glp_get_row_ub(lp,reali)
-        elseif t == GLP_LO
-            l[i] = glp_get_row_lb(lp,reali)
+            u[i] = GLPK.get_row_ub(lp,reali)
+        elseif t == GLPK.LO
+            l[i] = GLPK.get_row_lb(lp,reali)
             u[i] = typemax(Float64)
-        elseif t == GLP_DB || t == GLP_FX
-            l[i] = glp_get_row_lb(lp,reali)
-            u[i] = glp_get_row_ub(lp,reali)
+        elseif t == GLPK.DB || t == GLPK.FX
+            l[i] = GLPK.get_row_lb(lp,reali)
+            u[i] = GLPK.get_row_ub(lp,reali)
         end
     end
 
@@ -792,7 +793,7 @@ function LPDataFromMPS(mpsfile::String)
     sel = Array(Bool,nrow)
     for i in 1:ncol
         starts[i] = nnz+1
-        nnz1 = glp_get_mat_col(lp,i,index1,coef1)
+        nnz1 = GLPK.get_mat_col(lp,i,index1,coef1)
         sel[:] = false
         for k in 1:nnz1
             if (index1[k] != objrow)
