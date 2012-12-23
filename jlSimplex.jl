@@ -82,14 +82,15 @@ type Timings
     factor::Float64
     updatefactor::Float64
     updateiters::Float64
+    extra::Float64
 end
 
 function Timings()
-    Timings(0.,0.,0.,0.,0.,0.,0.,0.,0.)
+    Timings(0.,0.,0.,0.,0.,0.,0.,0.,0.,0.)
 end
 
 function show(io,t::Timings)
-    print(io,"matvec: $(t.matvec)\nratio test: $(t.ratiotest) \nscan: $(t.scan)\nftran: $(t.ftran)\nbtran: $(t.btran)\nftran2: $(t.ftran)\nfactor: $(t.factor)\nupdate factor: $(t.updatefactor)\nupdate iterates: $(t.updateiters)")
+    print(io,"matvec: $(t.matvec)\nratio test: $(t.ratiotest) \nscan: $(t.scan)\nftran: $(t.ftran)\nbtran: $(t.btran)\nftran2: $(t.ftran)\nfactor: $(t.factor)\nupdate factor: $(t.updatefactor)\nupdate iterates: $(t.updateiters)\nextra: $(t.extra)")
 end
 
 type DualSimplexData
@@ -450,12 +451,18 @@ function iterate(d::DualSimplexData)
     updateDuals(d,alpha,leaveIdx,enterIdx,thetad)
     d.timings.updateiters += time() - t
 
+    t = time()
+    rhs = zeros(nrow)
     if (enterIdx <= ncol) # structural
-        rhs = convert(Matrix{Float64},d.data.A[:,enterIdx])[:,1]
+        rowval = d.data.A.rowval
+        nzval = d.data.A.nzval
+        for k in d.data.A.colptr[enterIdx]:(d.data.A.colptr[enterIdx+1]-1)
+            rhs[rowval[k]] = nzval[k]
+        end
     else
-        rhs = zeros(nrow)
         rhs[enterIdx - ncol] = -1.
     end
+    d.timings.extra += time() - t
     
     t = time()
     aq = d.factor\rhs
