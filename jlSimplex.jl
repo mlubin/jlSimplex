@@ -1,5 +1,5 @@
-load("pfi")
-load("glpk") # for reading MPS
+require("pfi")
+require("glpk") # for reading MPS
 import GLPK
 #load("profile.jl")
 

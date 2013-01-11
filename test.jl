@@ -1,4 +1,4 @@
-load("jlSimplex")
+require("jlSimplex")
 
 function doTests()
 

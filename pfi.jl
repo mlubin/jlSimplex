@@ -1,4 +1,4 @@
-load("suitesparse")
+require("suitesparse")
 import Base.Ac_ldiv_B, Base.(\), Base.dot, Base.copy, Base.show
 
 type PackedEtaVector
