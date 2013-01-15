@@ -1,7 +1,5 @@
 require("pfi")
 require("glpk") # for reading MPS
-import GLPK
-#load("profile.jl")
 
 typealias ConstraintType Int # why no enum...
 typealias VariableState Int
@@ -139,8 +137,6 @@ function DualSimplexData(d::LPData)
         ones(nrow+ncol), # DSE
         0.,false,false,1e-6,1e-6,1e-12,0,Timings())
 end
-
-#@profile begin
 
 function initialize(d,reinvert::Bool) 
     nrow,ncol = size(d.data.A)
@@ -723,8 +719,6 @@ function flipBounds(d::DualSimplexData)
     end
 end
 
-
-#end # @profile begin
 
 function SolveMPSWithGLPK(mpsfile::String)
     lp = GLPK.Prob()
