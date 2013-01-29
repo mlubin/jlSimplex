@@ -87,7 +87,7 @@ function Timings()
     Timings(0.,0.,0.,0.,0.,0.,0.,0.,0.,0.)
 end
 
-function show(io,t::Timings)
+function show(io::IO,t::Timings)
     print(io,"matvec: $(t.matvec)\nratio test: $(t.ratiotest) \nscan: $(t.scan)\nftran: $(t.ftran)\nbtran: $(t.btran)\nftran2: $(t.ftran)\nfactor: $(t.factor)\nupdate factor: $(t.updatefactor)\nupdate iterates: $(t.updateiters)\nextra: $(t.extra)")
 end
 
