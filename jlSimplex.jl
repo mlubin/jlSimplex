@@ -1,5 +1,5 @@
 require("pfi")
-require("glpk") # for reading MPS
+require("GLPK") # use GLPK package for reading MPS
 
 typealias ConstraintType Int # why no enum...
 typealias VariableState Int
