@@ -1,4 +1,3 @@
-require("suitesparse")
 import Base.Ac_ldiv_B, Base.(\), Base.dot, Base.copy, Base.show
 
 type PackedEtaVector
@@ -60,7 +59,7 @@ type PFIManager
 end
 
 function PFIManager(mat)
-    return PFIManager(SuiteSparse.UmfpackLU!(mat),0,Array(PackedEtaVector,1000))
+    return PFIManager(lufact!(mat),0,Array(PackedEtaVector,1000))
 end
 
 function replaceColumn(pfi::PFIManager,tableauColumn::Vector{Float64},pivotalIndex)
